@@ -1,0 +1,120 @@
+import json
+import logging
+import boto3
+from botocore.exceptions import ClientError
+import time
+import os
+import tempfile
+import math
+import threading
+from io import BytesIO
+from boto3.s3.transfer import TransferConfig
+import concurrent.futures
+import hashlib
+
+def download_part(bucket_name, file_key, part_num, file_start, file_end, data, part_size, s3):
+    range_header = f'bytes={file_start}-{file_end}'
+    response = s3.get_object(Bucket=bucket_name, Key=file_key, Range=range_header, RequestPayer='requester')
+    body = response['Body']
+    chunk = body.read(part_size)
+    while chunk:
+        data[file_start:file_start+len(chunk)] = chunk
+        file_start += len(chunk)
+        chunk = body.read(part_size)
+
+def lambda_handler(event, context):
+    # 获取S3桶名称和文件键
+    # bucket_name = os.environ['BUCKET_NAME']
+    # file_key = os.environ['FILE_KEY']
+    bucket_name = os.environ['BUCKET_NAME']
+    file_key = os.environ['FILE_KEY']
+    download_path = './1'
+    print(f"boto3 version: {boto3.__version__}")
+    s3 = boto3.client('s3', region_name='cn-northwest-1')
+    
+    # 下载文件
+    responseResult = 0.0
+   
+    try:
+       
+        # 多线程下载到内存中
+        start_time_mg = time.time()
+        object_metadata = s3.head_object(Bucket=bucket_name, Key=file_key)
+        object_size = object_metadata['ContentLength']
+
+        part_size = 10 * 1024 * 1024
+        data = bytearray(object_size)
+        parts = math.ceil(object_size / part_size)
+        threads = []
+        
+        start_time_mg = time.time()
+        object_metadata = s3.head_object(Bucket=bucket_name, Key=file_key)
+        object_size = object_metadata['ContentLength']
+        object_checksum = object_metadata['ETag'].strip('"')
+    
+        part_size = 10 * 1024 * 1024
+        data = bytearray(object_size)
+        parts = math.ceil(object_size / part_size)
+    
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            futures = []
+            for part_num in range(1, parts + 1):
+                file_start = (part_num - 1) * part_size
+                file_end = min(file_start + part_size - 1, object_size - 1)
+                future = executor.submit(download_part, bucket_name, file_key, part_num, file_start, file_end, data, part_size, s3)
+                futures.append(future)
+    
+            concurrent.futures.wait(futures)
+
+        end_time_mg = time.time()
+        elapsed_time_mg = (end_time_mg - start_time_mg) * 1000
+        responseResult = elapsed_time_mg
+        print(f'get job with multiple thread 耗时: {elapsed_time_mg:.3f} 毫秒')
+    
+        # # 计算下载文件的校验码
+        downloaded_checksum = hashlib.md5(data).hexdigest()
+        
+        print(f'downloaded_checksum={downloaded_checksum}')
+        # if downloaded_checksum == object_checksum:
+        #     print("get job with multiple thread 文件下载成功,校验码正确")
+        # else:
+        #     print("get job with multiple thread 文件下载失败,校验码不正确")
+
+     
+  
+
+        # start_time_2 = time.time()
+        # config = TransferConfig(max_concurrency=9, multipart_threshold=10*1024*1024) 
+        # # 下载对象到临时文件
+        # s3_object = s3.get_object(Bucket=bucket_name, Key=file_key)
+        # # 处理下载的对象
+        # object_content = s3_object['Body'].read()
+            
+        # read_content_size = len(object_content)
+        # end_time_2 = time.time()
+        # # 计算耗时,精确到毫秒
+        # elapsed_time_2 = (end_time_2 - start_time_2) * 1000
+        # print(f'get job耗时: {elapsed_time_2:.3f} 毫秒')
+        # downloaded_checksum_2 = hashlib.md5(object_content).hexdigest()
+        # print(f'downloaded_checksum={downloaded_checksum_2}')
+        
+        # #多线程调用downlaod接口        
+        # start_time = time.time()
+        # config = TransferConfig(max_concurrency=9, multipart_threshold=10*1024*1024)  # 修改了这一行,将 10*1024*2 改为 10*1024*1024*2
+        # #s3.download_file(bucket_name, object_key, download_path, Config=config)
+        # s3.download_file(bucket_name, file_key, "/tmp/download200m", Config=config)
+        # # 记录结束时间
+        # end_time = time.time()
+        # # 计算耗时,精确到毫秒
+        # elapsed_time = (end_time - start_time) * 1000
+        # #print(f'文件 {object_key} 已成功下载到 {download_path}')
+        # print(f'下载耗时: {elapsed_time:.3f} 毫秒')
+    
+    
+    except Exception as e:
+        print(f'下载文件时出错: {e}') 
+ 
+    return {
+        'statusCode': 200,
+        'body': json.dumps(f'get job with multiple thread: {responseResult:.3f} miliseconds')
+    }
